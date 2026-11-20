@@ -1,0 +1,3 @@
+truck1: feasible; arcs=6; cost=9.00; peakLoad=1
+robot1: feasible; arcs=4; cost=3.00; peakLoad=1
+PASS: 10 directed time-space arcs; 2 feasible routes; 4 infeasible variants; original ArcTime/ArcType checks.

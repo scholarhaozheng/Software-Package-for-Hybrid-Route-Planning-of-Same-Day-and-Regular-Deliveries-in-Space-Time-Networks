@@ -1,0 +1,22 @@
+{
+  "depot":"D", "capacity":2, "now":3, "horizon":15, "serviceTime":1,
+  "links":[
+    {"from":"D","to":"A","duration":2,"cost":2},
+    {"from":"A","to":"D","duration":2,"cost":2},
+    {"from":"D","to":"B","duration":2,"cost":2},
+    {"from":"B","to":"D","duration":2,"cost":2},
+    {"from":"D","to":"C","duration":3,"cost":3},
+    {"from":"C","to":"D","duration":3,"cost":3},
+    {"from":"A","to":"B","duration":2,"cost":2},
+    {"from":"B","to":"A","duration":2,"cost":2},
+    {"from":"A","to":"C","duration":1,"cost":1},
+    {"from":"C","to":"A","duration":1,"cost":1},
+    {"from":"B","to":"C","duration":1,"cost":1},
+    {"from":"C","to":"B","duration":1,"cost":1}
+  ],
+  "accepted":[{"id":"r1","pickup":"A","delivery":"B","release":0,"latestDelivery":9,"quantity":1}],
+  "incoming":[
+    {"id":"r2","pickup":"C","delivery":"B","release":3,"latestDelivery":10,"quantity":1},
+    {"id":"r3","pickup":"D","delivery":"C","release":3,"latestDelivery":4,"quantity":1}
+  ]
+}

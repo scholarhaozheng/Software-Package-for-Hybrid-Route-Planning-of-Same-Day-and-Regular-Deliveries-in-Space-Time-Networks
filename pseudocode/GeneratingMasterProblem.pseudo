@@ -1,0 +1,99 @@
+PURPOSE Specify the paper's separate vehicle/package restricted master.
+REFERENCES Paper Eqs. 18--31; GeneratingMasterProblem.cs.
+NOTES Stable row keys identify duals across the current pool. Feasibility and
+    integrality tolerances govern extraction; selected integer plans are validated.
+INPUT pool; capacity by physical vehicle; optional node; domain in {continuous,binary}.
+OUTPUT model, variable/row maps and MasterResult over this identified route pool.
+
+POOL CONTRACT
+    vehicleRoutes L: one physical owner owner(l)=k, complete feasible vehicle path,
+        cost c_l, service incidence d[l,r], vehicle arc incidence b[l,i,t,j,t'].
+    packageRoutes Q: complete source-to-sink package paths, cost c_q,
+        coverage d[q,r], package arc incidence b[q,i,t,j,t'].
+    Each q represents one parent order's complete path. If stored as pickup and
+        delivery fragments, one variable selects both and transfer endpoints match.
+    g[l,k] := 1 iff owner(l)=k, otherwise 0. Service incidence is not ownership.
+    Include unused-vehicle and unserved-package routes when allowed by the paper
+        catalog; their zero vehicle cost / package penalty is part of c.
+    Every coefficient comes from recorded route contents. Missing sparse entries
+        mean zero; missing required owner/path/cost metadata is a contract failure.
+    A supported transition retains sigma/order/service-state/time indices from
+        Eqs. 21/28. Its package and vehicle endpoint decorations may differ by
+        layer; use the paper matching relation, not coordinate equality alone.
+
+TYPE MasterResult
+    status, solverStatus, objective?, weights?, columnWeights?, duals?, dualsByRowKey?
+    primalResidual?, integralityResidual?, isIntegral, fractionalCandidate?
+    routePoolSignature, rowSignature, scope, terminationReason?
+    # columnWeights aliases weights; dualsByRowKey aliases duals.
+    # scope = restricted_split_route_pool; excludes a full-route LP certificate.
+
+PROCEDURE BuildSplitMaster(pool,capacity,node=none,domain=continuous)
+    Validate pool contract and filter routes by inherited node restrictions.
+    Create x[l] and x[q] in [0,1]; use binary type only if domain=binary.
+    objective := etaK * SUM_l c_l*x[l] + etaR * SUM_q c_q*x[q].
+    FOR every order r
+        add SUM_q d[q,r]*x[q] = 1; key=(coverage,r); dual=u^tau_r.
+    FOR every physical vehicle k, including vehicles with no service
+        add SUM_l g[l,k]*x[l] = 1; key=(ownership,k); dual=u^epsilon_k.
+    FOR every current vehicle route l, order r, supported package arc (i,t,j,t')
+        packageUse := SUM_q b[q,i,t,j,t']*d[q,r]*x[q].
+        vehicleService := d[l,r]*x[l].
+        Create w[l,r,i,t,j,t'] in [0,1].
+        add packageUse - w >= 0; key=(gamma,l,r,i,t,j,t').
+        add vehicleService - w >= 0; key=(beta,l,r,i,t,j,t').
+        add w - vehicleService - packageUse >= -1; key=(alpha,l,r,i,t,j,t').
+        # Include all three rows even when d[l,r]=0 or packageUse is identically 0.
+    FOR every l and every supported transition in the paper matching relation
+        packageLoad := SUM_r w[l,r,matching package endpoints and times].
+        vehicleUse := b[l,matching vehicle endpoints and times]*x[l].
+        add packageLoad <= capacity[owner(l)]*vehicleUse.
+        key=(capacity,l,complete matched transition); dual=u^cap.
+        # x[l] on the RHS is required by Eq. 28.
+    Preserve one immutable row key per row and an explicit mapping of matching
+        package/vehicle transitions to the alpha/beta/gamma/capacity entries.
+    Apply node restrictions to every column; do not silently retain forbidden paths.
+    RETURN model, variable maps, row maps and input/pool/branch signatures.
+
+PROCEDURE SolveSplitMaster(pool,capacity,node=none,domain=continuous,limits=config.limits)
+    built := BuildSplitMaster(pool,capacity,node,domain).
+    IF construction fails: RETURN contract_failure with reason and scope.
+    Optimize within limits; record solverStatus and incumbent availability.
+    IF no incumbent exists
+        RETURN restricted_pool_infeasible if proved for this model,
+               otherwise limit_reached / numerical_failure / solver_failure.
+    Extract weights and recompute objective and all row residuals.
+    IF residuals exceed feasibility tolerance: RETURN numerical_failure.
+    integralityResidual := MAX_x abs(x-round(x)).
+    isIntegral := integralityResidual <= integralityTolerance.
+    IF domain=continuous AND solverStatus=OPTIMAL
+        Read duals by stored row keys and check solver sign conventions:
+            coverage/ownership duals free; gamma/beta/alpha >=0; capacity <=0
+            under the minimization row orientations written above.
+        Return MasterResult(status=optimal_lp, objective, weights, duals,
+                            isIntegral, signatures, scope=restricted_split_route_pool).
+    IF domain=binary AND a feasible incumbent exists
+        Return MasterResult(status=feasible_integer_pool, objective, weights,
+                            duals=none, signatures, scope=restricted_split_route_pool).
+    Return MasterResult(status=limit_reached, objective, weights, duals=none,
+                        terminationReason, scope=restricted_split_route_pool).
+    # An optimal restricted LP objective is not a lower bound for this paper's
+    # changing route-indexed master. A time-limited LP supplies no pricing dual.
+
+PROCEDURE ReconstructArcMarginals(pool,weights)
+    vehicleMarginal[k,i,t,j,t'] := SUM_l g[l,k]*b[l,i,t,j,t']*weights[l].
+    packageMarginal[r,i,t,j,t'] := SUM_q d[q,r]*b[q,i,t,j,t']*weights[q].
+    Include all original record identities if endpoint keys are not unique.
+    RETURN the two marginal maps with the pool/catalog signature.
+
+PROCEDURE SolveIntegerPool(pool,capacity,node,input,config)
+    result := SolveSplitMaster(pool,capacity,node,binary,config.limits.integerPool).
+    IF result has no incumbent: RETURN no_feasible_plan with result.status.
+    plan := ReconstructPlan(pool,result.weights,input,config).
+    IF ValidatePlan(plan,input,config) fails: RETURN invalid_integer_projection.
+    RETURN feasible plan, its physical cost and restricted-pool solver status.
+
+TERMINATION
+    Rebuild all route-indexed w variables and rows after adding vehicle columns.
+    Preserve old route identities, but discard old duals after any pool/node change.
+    Restricted infeasibility can result from missing columns; report its scope.

@@ -1,0 +1,91 @@
+PURPOSE Reconstruct executable plans and export paper-method routes and metrics.
+INPUT arc solutions or integral route selections, catalog, case and configuration
+OUTPUT validated Plan, route/metric tables and solver/search records
+REFERENCES Program.Generating_Results/Generating_Master_Results;
+           Generating_TS_RS_results; Y_to_notation; GeneratingRoutes
+
+PROCEDURE ReconstructPlan(pool,weights,input,config)
+    IF any route weight is outside integer tolerance
+        record reason=fractional; return none
+    REQUIRE exactly one selected physical route per vehicle, including unused
+    REQUIRE exactly one complete selected package route per order, including unserved
+    obtain ordered original arc records from selected routes
+    join stored package fragments at identical transfer location/time
+    assignments := ReconstructCarriers(vehiclePaths,packagePaths,input,config)
+    IF no consistent assignments exist: record support diagnostic; return none
+    acceptedOrders := orders with a complete physically served package path
+    unservedOrders := orders whose selected package route is the unserved choice
+    cost := etaK*sum(selected vehicle path costs)
+          + etaR*sum(selected package path costs)
+    plan := Plan{vehiclePaths,packagePaths,assignments,acceptedOrders,
+                 unservedOrders,cost,modelIdentity,status:reconstructed,input}
+    IF ValidatePlan(plan,input,config): return plan
+    return none with validation report
+
+PROCEDURE ReconstructCarriers(vehiclePaths,packagePaths,input,config)
+    FOR each selected supported package arc (r,a)
+        enumerate selected compatible vehicle arcs by full endpoint/state/time key
+        create binary carrier[k,r,a] only for compatible physical vehicles
+        require sum(k) carrier[k,r,a] = 1
+    FOR each vehicle movement/handling/waiting state transition
+        require total assigned package load <= that vehicle's Cp
+    keep carrier continuity between adjacent package arcs unless a legal
+        transfer state/time permits a carrier change
+    preserve onboard/current-carrier commitments supplied by input.dynamicState
+    solve this finite assignment-feasibility problem with zero objective
+    return assignments if feasible, otherwise none
+
+PROCEDURE ValidatePlan(plan,input=plan.input,config=input.configuration)
+    IF plan is none: return false with reason=no_plan
+    FOR each physical vehicle path and served package path
+        CheckPath(path,its source,its sink,config)
+    verify one route choice per physical vehicle and per complete order
+    verify visible orders, pickup-before-delivery, windows and allowed transfer sites
+    verify carrier support/capacity on every supported package arc and transition
+    verify every paper service-incidence and coupling row from the selected records
+    verify vehicle duty limits, mode/zone restrictions and declared LT schedules
+    REQUIRE unserved orders use only their declared penalty choice
+    REQUIRE previously accepted unfinished orders remain physically served
+    IF input.dynamicState exists: CheckCommitments(plan,input.dynamicState)
+    recomputedCost := etaK*sum(vehicle arc costs)+etaR*sum(package arc costs)
+    REQUIRE abs(recomputedCost-plan.cost) <= configured objective tolerance
+    return valid or failure diagnostics
+
+PROCEDURE ExportArcSolution(solution,network,caseId)
+    REQUIRE solution.plan exists and passes ValidatePlan
+    FOR each physical owner
+        emit ordered endpoints,times,original arc IDs,vehicle type and arc costs
+    emit complete package paths, carrier assignments and transfer location/time
+    emit unserved choices separately from physical service
+    emit recomputed objective, status, case/config/catalog identifiers
+
+PROCEDURE ExportMasterSolution(pool,weights,input,config)
+    emit selected route IDs,physical ownership,weights,arcs and unweighted costs
+    IF weights are fractional
+        label output=LP mixture; return tables without an executable Plan
+    plan := ReconstructPlan(pool,weights,input,config)
+    return tables,plan and validation report
+
+PROCEDURE ComputeServiceMetrics(plan,orders)
+    denominator := eligible submitted orders in the declared epoch/case
+    completed := orders whose required physical delivery events have occurred
+    plannedServed := plan.acceptedOrders
+    transfer := served orders changing carrier at a legal matching transfer state
+    shared := served orders overlapping another load on a physical carrier
+    return separate planned/completed counts and ratios with their denominator
+    report vehicle cost,package cost,unserved penalty and weighted objective
+
+PROCEDURE FormatRoute(path)
+    map service roles to readable labels; retain original IDs/times in data columns
+    return notation and path-validation status
+
+PROCEDURE ExportSearchHistory(nodes,iterations)
+    emit node/parent IDs,branch decisions,objective,status and stop reason
+    include a bound only with its supplied scope and certificate
+    return ordered history
+
+NOTES
+    A Plan requires carrier reconstruction and network/coupling validation.
+    Validation covers zero-time cycles, unserved choices, onboard work and cost
+    weights applied once. Experiment and example outputs retain their own case
+    identifiers and configurations.

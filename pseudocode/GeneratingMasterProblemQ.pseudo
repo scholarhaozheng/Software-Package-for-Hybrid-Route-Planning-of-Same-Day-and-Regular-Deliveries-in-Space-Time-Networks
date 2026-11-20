@@ -1,0 +1,46 @@
+PURPOSE Specify the paper's nonlinear split-route master P2 over a selected pool
+    as an optional reference solve, separate from the linearized RMP controller.
+REFERENCES Paper Eqs. 18--21; GeneratingMasterProblemQ.cs.
+NOTES This binary P2 solve uses physical-vehicle ownership and validates the
+    resulting plan. Its solver bound applies to the selected route pool.
+INPUT split route pool, vehicle capacities, node restrictions, input and config.
+OUTPUT feasible physical plan if found; objective and bound scoped to this pool.
+
+PROCEDURE SolveQuadraticPool(pool,capacity,node,input,config)
+    Validate the same d[q,r],g[l,k],d[l,r],b coefficients as BuildSplitMaster.
+    Remove routes forbidden by node; create binary x[l],x[q].
+    One x[q] selects the complete package path, including both stored fragments.
+    objective := etaK*SUM_l c_l*x[l] + etaR*SUM_q c_q*x[q].
+    FOR every parent order r: add SUM_q d[q,r]*x[q] = 1.
+    FOR every physical vehicle k: add SUM_l g[l,k]*x[l] = 1.
+    FOR every current vehicle route l and complete supported transition
+        loadProduct := SUM_r (
+            SUM_q b[q,matching package endpoints and times]*d[q,r]*x[q])
+            * d[l,r]*x[l].
+        add loadProduct <= capacity[owner(l)]
+             * b[l,matching vehicle endpoints and times]*x[l].
+    Preserve the paper's state matching, unserved penalties and unused routes.
+    Enable nonconvex quadratic solving when required by the chosen solver.
+    Optimize within config.limits.referenceMaster.
+    Record solverStatus, objective bound and incumbent availability separately.
+    IF no incumbent exists
+        RETURN QuadraticResult{status,scope=restricted_P2_pool,plan=none}.
+    Check all binary, coverage, ownership and nonlinear-capacity residuals.
+    plan := ReconstructPlan(pool,x,input,config).
+    IF ValidatePlan(plan,input,config) fails: RETURN invalid_reference_solution.
+    RETURN QuadraticResult{status,plan,physicalCost=plan.cost,objective,bound,
+        scope=restricted_P2_pool,routePoolSignature,branchSignature}.
+
+PROCEDURE CompareBinaryPoolModels(pool,capacity,node,input,config)
+    linearized := SolveIntegerPool(pool,capacity,node,input,config).
+    nonlinear := SolveQuadraticPool(pool,capacity,node,input,config).
+    IF either solve is unfinished: RETURN comparison_open with both statuses.
+    Compare feasible plans and objectives under identical route/cost/branch inputs.
+    If both are solved globally, their binary-pool optimum should agree within
+        tolerance because the three w inequalities enforce the product exactly.
+    RETURN agreement or coefficient/solver discrepancy with evidence.
+
+TERMINATION
+    A solver bound applies to the restricted route pool, not the full decomposition.
+    A validated integer feasible plan can improve the decomposition incumbent.
+    Control uses the current solution and its validated objective.

@@ -1,0 +1,42 @@
+PURPOSE Run declared paper-method case/variant combinations with traceable outputs.
+INPUT case manifest, transfer/sharing variants, resource and output configuration
+OUTPUT per-case status, validated routes and metric tables
+REFERENCES Program; Generating_TS_RS_results
+
+PROCEDURE RunBatch(manifest,configuration)
+    FOR each declared case and variant
+        resolve required coordinate/window/flag/schedule files from the manifest
+        input := LoadCase(case.directory,case.selection,configuration)
+        effectiveConfig := configuration with the declared transfer/sharing and
+            operational variant; LoadCase applies these explicit overrides
+        allocate a unique case/variant output directory
+        record input fingerprints, paper-method version and effective configuration
+        result := RunSplitDecomposition(case.directory,effectiveConfig)
+        IF result.bestFeasiblePlan exists
+            validate and export plan, costs, service metrics and search history
+        ELSE
+            export status and unresolved work without reading unavailable values
+        IF variant requests periodic updates and result.bestFeasiblePlan exists
+            RunDynamicEpochs(result.bestFeasiblePlan,input.arrivals,
+                             configuration.epochs,input,configuration)
+        preserve all solver/limit/stop statuses in the per-case record
+    return per-case result table
+
+PROCEDURE RunTransferSharingVariants(case)
+    FOR each explicitly listed permission combination
+        clone input records; set the actual transfer/sharing eligibility flags
+        route to the selected static or periodic paper-method procedure
+        report effective inputs, validated outputs and metrics
+    compare results only under matching cost, time-grid and demand conventions
+
+PROCEDURE RunInitializationProbe(case)
+    input := LoadCase(case.directory,case.selection,case.configuration)
+    network := BuildNetwork(input,input.configuration)
+    pool,initialSolutions := CreateSeedPool(network,input)
+    return route coefficients, physical/unserved labels and seed statuses
+
+ASSUMPTIONS
+    Each manifest entry identifies its inputs, limits and output location.
+    Transfer/sharing variants change model eligibility as well as report labels.
+    The paper capacity equation counts package units. Exclusive service with
+    full-capacity load is a separate scenario option.

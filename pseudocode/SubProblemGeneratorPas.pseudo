@@ -1,0 +1,86 @@
+PURPOSE Price one complete package path under Eqs. 37--40 and optionally construct
+    supporting vehicle routes without replacing the saved pricing result.
+REFERENCES Paper Eqs. 37--40; SubProblemGeneratorPas.cs.
+NOTES Each order has a separate pricing solve. Save its path, objective and
+    status before the optional support solve; fix all path values in that solve.
+INPUT network, target order r, current dual bundle, package branch decisions,
+    limits, includeSupport=false; optional node vehicle branches for support.
+OUTPUT PackagePricingResult with separate pricingObjective/supportObjective,
+    separate statuses, target package path, optional supporting vehicle paths.
+
+PROCEDURE SolveSeparatePackageModel(network,r,duals,packageBranches,limits,
+                                    includeSupport=false,vehicleBranches=empty)
+    Create binary y[r,i,t,j,t'] for each served-path arc in A_e,r.
+    The explicit vo->vd unserved connector is represented by its penalty seed
+        route and excluded here. This separates family 13 from the served-path
+        model so Eq. 37 retains its stated service term.
+    add net outflow over the complete source connector family = 1.
+    add net inflow over the complete sink connector family = 1.
+    add outgoing flow = incoming flow at every other internal state.
+    Include transfer-state/time balance and the complete pickup/delivery path.
+    If the storage uses r+ and r- fragments, select them together and match their
+        transfer states; do not return an unpaired fragment as a complete q.
+    Service-start expression for target r equals 1; for every other order it is 0.
+        This is the target-package convention stated after Eq. 37.
+    Apply all order-r branch decisions to their full immutable arc record keys:
+        forbid -> y=0; force -> y=1 on this required complete order path.
+    Preserve epoch commitments and accepted-service obligations.
+    Require a single source-to-sink path under the declared time/state ordering;
+        for cyclic catalogs, add path/cycle constraints.
+
+    pricingObjective := etaR * SUM_(i,t,j,t') c[r,i,t,j,t']*y[r,i,t,j,t']
+                        - u^tau[r].
+    FOR every current vehicle route l and supported package arc (i,t,j,t')
+        pricingObjective += y[r,i,t,j,t'] *
+            (-u^gamma[l,r,i,t,j,t'] + u^alpha[l,r,i,t,j,t']).
+    # This is Eq. 37 after substituting its target-package service indicators.
+    # The remaining route-indexed dual terms retain the current pool identity.
+    Set pricingObjective; optimize within pricing limits.
+    Save pricingStatus, pricingSolverBound and incumbent availability immediately.
+    IF no incumbent: RETURN no_candidate with pricingStatus and signatures.
+    Audit integrality, source/sink, path, transfer times and branch decisions.
+    Save all snapped y values and the ordered package path before any second solve.
+    savedPricingObjective := evaluate the original pricing expression on this path.
+    Require agreement with the first solve's objective within objectiveTolerance.
+    physicalPackageCost := SUM original package arc costs, including any penalty.
+    result := PackagePricingResult{orderId=r,candidate=packagePath,
+        pricingObjective=savedPricingObjective,pricingStatus,pricingSolverBound,
+        physicalPackageCost,supportStatus=not_requested,supportObjective=none,
+        supportingVehiclePaths=empty,validation=passed,dual/pool/branch signatures}.
+    IF includeSupport=false: RETURN result.
+
+    support := BuildSupportingVehiclePaths(network,packagePath,vehicleBranches,limits).
+    Copy support.status/objective/paths into the separate support fields.
+    Require result.candidate and result.pricingObjective remain unchanged.
+    RETURN result even if support fails; report the support failure explicitly.
+    # A support solve is an optional route-seeding aid, not Eq. 37 pricing.
+
+PROCEDURE BuildSupportingVehiclePaths(network,fixedPackagePath,vehicleBranches,limits)
+    Create a fresh physical vehicle arc model.
+    Fix every target package arc to its saved 0/1 value, including the zeros.
+    Add one source-to-sink/unused path per physical vehicle, internal balance,
+        duty limits, permitted modes, epoch commitments and vehicle arc branches.
+    Add the paper's package-to-vehicle support/assignment, capacity and transfer
+        conditions for the fixed package path (ArcModel.pseudo, Eq. 13 interface).
+    objective := etaK * SUM_k SUM_(i,t,j,t') c[k,i,t,j,t']*vehicleY[k,i,t,j,t'].
+    Optimize within support limits and retain a status scoped to this support model.
+    IF no feasible incumbent: RETURN support_open_or_infeasible with no paths.
+    Independently validate all returned physical paths and their package support.
+    RETURN support_feasible, original physical objective and complete vehicle paths.
+    # support_seed routes retain the support objective; pricing status comes
+    # from the separate reduced-cost solve.
+
+PROCEDURE ExtractPairedPackageRoutes(result)
+    Require a validated complete result.candidate for one parent order.
+    If represented in two fragments, return the linked r+/r- arc sets together,
+        with one parent package coverage coefficient and one selection identity.
+    Keep optional supporting vehicle paths under their own physical owners.
+    RETURN complete package route plus separately tagged supporting vehicle routes.
+
+STATUS CONTRACT
+    Negative valid pricing incumbents may be admitted before optimal termination.
+    A nonnegative time-limited incumbent is pricing_open, not exhausted pricing.
+    Proven infeasibility exhausts the declared served-path oracle; an allowed
+        unserved seed route can still satisfy the master. If a current admissible
+        served route contradicts that status, report a model-consistency failure.
+    Only the first model's status/bound/objective describe package pricing.

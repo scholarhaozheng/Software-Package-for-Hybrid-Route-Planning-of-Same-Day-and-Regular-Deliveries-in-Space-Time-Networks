@@ -1,0 +1,26 @@
+[
+  {
+    "check": "space-time fixture",
+    "expectedExit": 0,
+    "actualExit": 0,
+    "passed": true
+  },
+  {
+    "check": "dynamic fixture",
+    "expectedExit": 0,
+    "actualExit": 0,
+    "passed": true
+  },
+  {
+    "check": "non-advancing arc rejected",
+    "expectedExit": 1,
+    "actualExit": 1,
+    "passed": true
+  },
+  {
+    "check": "duplicate order rejected",
+    "expectedExit": 1,
+    "actualExit": 1,
+    "passed": true
+  }
+]

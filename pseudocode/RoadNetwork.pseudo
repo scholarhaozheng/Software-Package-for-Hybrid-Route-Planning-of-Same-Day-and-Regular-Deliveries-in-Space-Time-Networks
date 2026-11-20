@@ -1,0 +1,74 @@
+PURPOSE Generate the paper's vehicle and package space-time layers at an epoch.
+INPUT InputDataset and time-grid, cost, operational and commitment configuration
+OUTPUT complete arc catalogs, adjacency, source/sink and transfer metadata
+REFERENCES RoadNetwork.GetArc; paper arc tables and Eqs. 1-4, 17
+RULE CATALOG ../specs/NETWORK_RULES.md
+
+PROCEDURE TravellingCost(firstPoint,secondPoint,convention)
+    IF convention == retained_coordinate_network
+        distance := floor(EuclideanDistance(firstPoint,secondPoint))
+        return distance,distance,distance
+    ELSE
+        return declared distance,mode-specific travel duration,generalized cost
+
+PROCEDURE AddTimedArc(owner,family,i,t,j,duration,cost,catalogs)
+    tPrime := t + duration
+    REQUIRE duration >= 0 and both endpoints lie on the declared time grid
+    REQUIRE endpoint states, windows, mode and zone satisfy the family rule
+    create immutable recordId and full owner/state/time endpoint identities
+    preserve distinct family records even when their endpoint coordinates coincide
+    add the record once to owner/family, incoming/outgoing and endpoint indexes
+    store duration, cost, service events and SupportKey(record)
+    return record
+
+PROCEDURE BuildNetwork(input,config)
+    orders := input.orders; vehicles := input.vehicles
+    catalogs := empty owner-indexed maps and adjacency
+    rules := paper_catalog from RULE CATALOG
+    instantiate arrival, departure and passing states at each service location
+    instantiate vehicle origins/returns, terminals, transfer states and virtual ends
+    FOR each physical vehicle k
+        apply ADR zone/reachability or LT terminal/schedule restrictions
+        enumerate all rule-permitted point pairs and departure times
+        instantiate vehicle families 1..13:
+            start, end, travel, loading, unloading, dwelling,
+            wait-load I/II, wait-unload I/II, transfer I/II, unused
+        for every instance derive endpoints, windows, duration and cost from rules
+        AddTimedArc for every feasible instance
+    FOR each order r
+        enumerate its permitted service/terminal states and departure times
+        instantiate package families 1..15:
+            start, end, travel, loaded, unloaded, dwelling,
+            wait-pickup I/II, wait-dropoff I/II, transfer I/II, unserved,
+            carried-through pickup, carried-through dropoff
+        permit handover only at declared locations/times and when allowed for r
+        add its unserved arc with penalty pi[r] unless service is already committed
+        AddTimedArc for every feasible instance
+        mark families 3..10,14,15 as the supported carriage subset A_phi[r]
+    create one super-source/sink per owner joining all legal start/end times
+        so its total layer flow is one, not one unit at each possible start time
+    build compatible package/vehicle arc mapping using full state transitions
+    IF input carries DynamicState
+        preserve committed records and residual sources supplied by that state
+        disallow new departures before release of an in-progress vehicle
+    return catalogs with ordered indexes, ruleset ID, costs and input fingerprint
+
+PROCEDURE ImportLocalCatalog(originalRecords,config)
+    preserve original record identities, endpoint decorations, times and costs
+    map roles using RULE CATALOG without manufacturing absent source records
+    return catalog with rulesetId=retained_source and an explicit coverage report
+
+PROCEDURE CheckPath(orderedArcs,source,sink,config)
+    REQUIRE first tail == source and last head == sink
+    REQUIRE consecutive arcs join at identical owner/state/time keys
+    REQUIRE every arc belongs to the declared catalog and satisfies its rule
+    REQUIRE no repeated record or disconnected selected component
+    check service order, time windows and sum of vehicle arc durations <= dutyLimit
+    validate transfer pairs and support/load through ValidatePlan for coupled paths
+    return valid or a failed condition with its record IDs
+
+ASSUMPTIONS
+    Zero-time connectors follow a declared state order. Catalogs without such an
+    order require cycle-elimination constraints to obtain connected paths.
+    Use the endpoint/index conventions in RULE CATALOG for generation and matching.
+    ImportLocalCatalog preserves the records and costs produced by the C# builder.

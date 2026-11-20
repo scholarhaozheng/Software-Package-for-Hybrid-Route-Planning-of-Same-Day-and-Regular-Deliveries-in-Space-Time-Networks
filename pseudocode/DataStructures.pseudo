@@ -1,0 +1,101 @@
+PURPOSE Define the paper's separate vehicle/package routes and shared interfaces.
+INPUT selected case, space-time catalog, route and solver records
+OUTPUT immutable identities, route coefficients, plans and search records
+REFERENCES Point.cs; Arc.cs; ClassName/*.cs; DistinctItemComparer*.cs
+
+RECORD Point
+    fullId, pointType, layerType, x, y, serviceState
+RECORD TimeWindow
+    ownerId, pointType, lowerLimit, upperLimit
+RECORD PointTW
+    point, timeWindow, otherPoint, otherTimeWindow, submittedAt
+RECORD SpaceTimeVertex
+    ownerType, ownerId, pointIdentity, serviceState, time
+RECORD SpaceTimeVertices
+    tail: SpaceTimeVertex, head: SpaceTimeVertex
+RECORD Arc
+    recordId, ownerType, ownerId, family, arcType, tail, head
+    duration, value, supportKey, serviceEvents, catalogId
+RECORD VehicleRoute
+    routeId, physicalVehicleId, orderedArcIds, cost, duration
+    g[vehicle], serviceIncidence d[order], endpointIncidence B[stateTransition]
+RECORD PackageRoute
+    routeId, orderId, orderedArcIds, cost, coverage d[order]
+    endpointIncidence b[stateTransition], fragments, transferEvents, isUnserved
+    A complete package route has one master variable even when stored as r+/r-.
+RECORD SplitRoute
+    routeId, ownerId, kind, arcIds, serviceIncidence, endpointIncidence, cost
+    paperRecord: VehicleRoute or PackageRoute
+RECORD BranchDecision
+    ownerKind, ownerId, catalogSignature, originalArcRecordId
+    complete tail/head identities and times, value in {0,1}
+    Alias ArcBranchDecision uses this record; source BB_info indices are decoded
+        into these stable keys before search begins.
+RECORD BranchNode
+    id, parentId, depth, active, inheritedDecisions
+    vehicleBranches, packageBranches, pool, status, branchSignature
+    Node is an alias of BranchNode; nodeId is a reporting alias of id.
+    bound: optional value with the scope/certificate that supplied it
+RECORD Plan
+    vehiclePaths, packagePaths, assignments, acceptedOrders, unservedOrders
+    cost, modelIdentity, status, input
+RECORD DynamicState
+    previousPlan, decisionTime, implementationTime, completedPrefix
+    inProgressArcs, residualSources, onboardOrders, acceptedUnfinishedOrders
+
+INTERFACE RESULT RECORDS
+    InputDataset{orders,vehicles,arrivals,selectedFiles,configuration}
+    ArcResult{incumbent,objective,solverBound,status,arcMaps,assignments,plan,scope}
+    MasterResult{status,solverStatus,objective,weights,duals,isIntegral,
+                 fractionalCandidate,primalResidual,integralityResidual,
+                 poolSignature,rowSignature,scope}
+    columnWeights aliases weights; dualsByRowKey aliases duals.
+    QuadraticResult{status,objective,weights,plan,bound,scope,
+                    routePoolSignature,branchSignature}
+    VehiclePricingResult{candidate,referenceRouteId,pricingObjective,solverStatus,
+                         solverLowerBound,physicalCost,signatures}
+    PackagePricingResult{candidate,pricingObjective,pricingStatus,pricingSolverBound,
+                         physicalPackageCost,supportStatus,supportObjective,
+                         supportingVehiclePaths}
+    SplitResult{bestFeasiblePlan,status,pool,nodeHistories,initialSolutions,input,
+                scope,globalLowerBound=unknown,relativeGap=unknown,unresolvedNodes}
+    PricingBatch{results,candidates,diagnostics,status,counter,signatures}
+    AdmissionResult{pool,inserted,duplicates,rejected,
+                    hasNegativeDuplicate,hasContractFailure}
+    RoutePool{vehicleRoutes,packageRoutes,g,dVehicle,dPackage,B,b,costs,
+              A,A_transpose,B_transpose,routes,combinedRoutes,signature,
+              catalogSignature,configuration}
+    Unavailable objectives/solutions are none. A solver status alone is not a Plan.
+
+PROCEDURE VertexEqual(left,right)
+    compare owner type/id, full point identity, service state and time
+    return equality
+
+PROCEDURE SupportKey(arc)
+    remove only the layer owner from both endpoint keys
+    preserve complete service-point identities, state decorations and both times
+    return the ordered endpoint pair under the catalog's compatibility mapping
+
+PROCEDURE ArcEqual(left,right)
+    compare catalogId and original recordId; verify all recorded fields agree
+    return equality
+
+PROCEDURE CloneNode(parent)
+    copy mutable pools, decisions and status into independent containers
+    share immutable catalog records; allocate a fresh node ID and solver model
+    return child
+
+PROCEDURE CheckViews(pool)
+    REQUIRE exactly one cost and one validated path per route ID
+    REQUIRE g[l,k] = 1 iff l belongs to physical vehicle k
+    REQUIRE dPackage[q,r] = 1 iff q is a complete route choice for order r
+    REQUIRE every r+/r- fragment points to exactly one complete package route
+    REQUIRE forward/transposed A and B views agree, absent coefficients = 0
+    REQUIRE service incidence dVehicle is distinct from physical ownership g
+    REQUIRE coefficients and costs recompute from the same original arc records
+    return valid
+
+NOTES
+    A package's penalized unserved route covers its route-choice row;
+    isUnserved distinguishes that choice from physical service.
+    Node copies share immutable catalogs and own their mutable state.

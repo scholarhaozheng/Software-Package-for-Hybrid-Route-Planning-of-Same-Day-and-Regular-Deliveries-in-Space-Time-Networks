@@ -1,0 +1,65 @@
+PURPOSE Price one physical vehicle path using the paper's Eq. 32 objective.
+REFERENCES Paper Eqs. 32--36; SubProblemGeneratorVeh.cs.
+ASSUMPTIONS Eq. 32 indexes duals by an existing vehicle route l. For a new route,
+    pricingContext selects a reference route lRef owned by k; orchestration tests
+    every such context. This reference-route convention is a design choice where
+    the paper leaves indexing unspecified. Its result is scoped to that context,
+    rather than a reduced-cost oracle for a fixed full master.
+INPUT immutable network, vehicleId k, current master duals, inherited vehicle
+    branches, pricingContext(lRef,rowSignature,poolSignature), solve limits.
+OUTPUT VehiclePricingResult with candidate path, objective and bound for this
+    context, solver status, physical cost, signatures and validation outcome.
+
+PROCEDURE SolveSeparateVehicleModel(network,k,duals,vehicleBranches,pricingContext,limits)
+    Require owner(lRef)=k, current dual/row/pool signatures and a complete catalog.
+    Create binary y[k,i,t,j,t'] for each ordinary operating-path arc in A_e,k.
+    The explicit vo->vd unused-vehicle connector is already represented by its
+        seed route and is excluded from this operating-path pricing model.
+    sourceFlow := net outflow over the complete virtual-source connector family.
+    add sourceFlow=1 and net inflow over the complete sink connector family=1.
+    FOR every internal vehicle state
+        add total outgoing y - total incoming y = 0.
+    add SUM_(i,t,j,t') duration[k,i,t,j,t']*y[k,i,t,j,t']
+        <= sourceFlow*maximumDuty[k].
+    Apply permitted vehicle type/zone, fixed service and committed-arc conditions
+        represented by this epoch's catalog and inherited hard constraints.
+    FOR every branch on vehicle k
+        Resolve the full immutable arc key to its original record.
+        For forbid: add y[record]=0. For force: add y[record]=1.
+        If a forced record is absent: RETURN context_infeasible.
+        If a key is ambiguous: RETURN branch_key_failure.
+
+    pricingObjective := etaK * SUM_(i,t,j,t') c[k,i,t,j,t']*y[k,i,t,j,t'].
+    FOR each vehicle arc (i,t,j,t') and order r
+        Match the paper's complete endpoint/state transition to lRef's rows.
+        pricingObjective += y[k,i,t,j,t'] *
+            (-u^beta[lRef,r,i,t,j,t'] + u^alpha[lRef,r,i,t,j,t']).
+    pricingObjective -= sourceFlow * u^epsilon[k].
+    FOR each vehicle arc (i,t,j,t')
+        pricingObjective -= y[k,i,t,j,t'] * capacity[k] *
+                            u^cap[lRef,i,t,j,t'].
+    Terms outside the defined supported-row domain are zero. A missing dual for
+        an existing row is an error, not an implicit zero.
+    Set objective, optimize within limits and store status/bound before extraction.
+    IF no incumbent: RETURN no_candidate with solverStatus and context identity.
+    Check binary residual; snap only within integralityTolerance.
+    Extract and order the single k source-to-sink path, including idle if selected.
+    Validate timing, flow, duty, epoch commitments and every inherited branch.
+    Reject detached cycles; if the catalog is not acyclic, add explicit path/cycle
+        constraints before solving.
+    originalObjective := evaluate pricingObjective on the audited path.
+    Require agreement with the solver incumbent objective within objectiveTolerance.
+    physicalCost := SUM original arc costs; do not substitute pricing coefficients.
+    RETURN VehiclePricingResult{vehicleId=k,referenceRouteId=lRef,candidate,
+        pricingObjective=originalObjective,solverLowerBound,solverStatus,
+        physicalCost,validation=passed,poolSignature,rowSignature,branchSignature}.
+
+STATUS CONTRACT
+    optimal_context means the entire declared operating-path model was solved for
+        this one lRef. time_limit with a valid negative incumbent can add a route.
+    A nonnegative incumbent under a time limit cannot establish exhaustion.
+    Proven infeasibility exhausts this declared operating-path context; it is
+        compatible with an owner represented only by an unused seed route.
+    If a current admissible operating route exists for k yet this same-scope
+        pricing model is infeasible, report a catalog/branch consistency problem.
+    No-progress results identify both k and lRef and use the path of vehicle k.

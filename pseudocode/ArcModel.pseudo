@@ -1,0 +1,96 @@
+PURPOSE Build the paper arc model and initial vehicle/package route pools.
+INPUT network, InputDataset, variant and optional inherited branch restrictions
+OUTPUT model with vehicle/package Y, service indicators, status and a feasible Plan
+REFERENCES public vrp_time_space.cs; Program calls to the two absent initializers
+PAPER Eqs. 5-17; network rule catalog; periodic rescheduling framework
+
+PROCEDURE BuildArcModel(network,input,variant,node=none)
+    REQUIRE all model inputs use one identified catalog and cost convention
+    create binary Y[k,a] for every physical-vehicle arc
+    create binary Y[r,a] for every complete-package-layer arc
+    minimize etaK * sum(k,a) c[k,a]*Y[k,a]
+           + etaR * sum(r,a) c[r,a]*Y[r,a]
+    include pi[r] through the package unserved arc cost, once per order
+    FOR each physical vehicle k
+        add total super-source outflow - inflow = 1                 [6]
+        add total super-sink inflow - outflow = 1                   [7]
+        add internal incoming = outgoing at every other vertex     [8]
+        add sum(a) duration[k,a]*Y[k,a] <= dutyLimit[k]              [14]
+    FOR each order r
+        add total source outflow - inflow = 1                      [9]
+        add total sink inflow - outflow = 1                        [10]
+        add incoming = outgoing at every transfer state/time       [11]
+        add incoming = outgoing at all other internal states       [12]
+        if stored as r+/r-, match their transfer location/time exactly
+    FOR each vehicle k and order r
+        S[k,r] := sum of k's selected service-indicator arcs for r
+            using the transfer/service incidence definition in Eq. 13
+        REQUIRE S[k,r] has the declared 0/1 service-event interpretation
+        expose S as assignment metadata Z, not an independent free assignment
+    FOR each k and supported state transition s in A_phi
+        packageUse[r,s] := sum of compatible package arc variables for r
+        vehicleUse[k,s] := sum of compatible physical vehicle arc variables
+        add sum(r) packageUse[r,s]*S[k,r] <= Cp[k]*vehicleUse[k,s]    [13]
+        if a linear model is requested, create U[k,r,s] in [0,1]:
+            U <= packageUse; U <= S; U >= packageUse+S-1
+            use sum(r) U[k,r,s] <= Cp[k]*vehicleUse[k,s]
+    use only families 3..10,14,15 for the supported subset           [17]
+    require ordered connected paths; impose cycle elimination if needed
+    apply declared LT schedule restrictions, availability and service eligibility
+    IF variant == dynamic
+        apply input.dynamicState commitments through FreezeLegacyDecisions
+    IF node exists
+        impose all inherited vehicle/package decisions on the corresponding Y
+        use the same stable keys and required values as pool filtering/pricing
+    return model with network,input,configuration,variable maps and row metadata
+
+PROCEDURE SolveArcModel(model,limits=model.configuration.limits)
+    optimize under limits; record solver status, incumbent availability and bound
+    IF no incumbent: return ArcResult with plan=none and unavailable values
+    check integer tolerance; extract ordered vehicle and complete package paths
+    reconstruct carrier assignments with no carrier changes outside legal transfers
+    plan := Plan(paths,assignments,acceptedOrders,unservedOrders,cost,modelId,input)
+    IF ValidatePlan(plan,model.input,model.configuration) fails
+        return status=invalid_candidate,plan=none with diagnostic records
+    return ArcResult{incumbent:true,objective,solverBound,status,
+                     arcMaps:Y,assignments:Z,plan,scope:declared_arc_model}
+
+PROCEDURE CreateSeedPool(network,input,node=none)
+    pool := empty RoutePool; initialSolutions := empty records; alternateResults := []
+    FOR each physical vehicle k
+        enumerate every legal unused connector as a complete vehicle route
+        also retain any required committed continuation supplied by the prior plan
+        for each route satisfying node restrictions: MergeColumn(pool,route)
+    FOR each order r
+        if unserved is permitted and compatible with node/commitments
+            for every legal unserved connector/time copy
+                MergeColumn(pool,complete package route with cost pi[r])
+    initial := SolveArcModel(BuildArcModel(network,input,initial,node),
+                             input.configuration.limits.initialization)
+    IF initial.plan exists
+        merge ExtractSplitColumns(initial,initializationKind=initial)
+    FOR each order r missing a physical-service seed, within the seed budget
+        model := BuildArcModel(network,input,virtual_package,node)
+        prohibit r's unserved arc; allow other uncommitted orders to be unserved
+        alternate := SolveArcModel(model,input.configuration.limits.initialization)
+        if alternate.plan exists
+            merge ExtractSplitColumns(alternate,initializationKind=virtual_package)
+        append alternate status and extracted route IDs to alternateResults
+    CheckViews(pool)
+    initialSolutions := {initial,virtual_package:alternateResults,
+                         feasiblePlan:best validated complete plan or none}
+    return pool,initialSolutions
+
+ASSUMPTIONS
+    CreateSeedPool uses constrained arc solves and enumerated fallback routes.
+    This seed strategy is a design choice; the paper does not prescribe it.
+    "virtual_package" names the seed-generation call. Unserved routes provide
+    penalized coverage and do not represent physical service.
+    A feasible seed pool may serve no orders. Branches and commitments can remove
+    fallback choices; a failed seed solve returns its status.
+    Service-indicator indexing, source/sink aggregation and carrier reconstruction
+    use the declared catalog mapping.
+
+IMPLEMENTATION
+    Program.cs calls vrp_time_space_ini and vrp_time_space_vis_pas. Their initial
+    route-pool interfaces are specified here; the class files are not distributed.

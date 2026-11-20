@@ -1,0 +1,46 @@
+PURPOSE Load regular and same-day orders into the paper's epoch-specific dataset.
+INPUT case directory, row/ID selection, parsing and model configuration
+OUTPUT orders, physical vehicles, future arrivals and input provenance
+REFERENCES Program.GetCoordTWDic_Dy; GetTsOrNotandRideshareOrNot
+
+PROCEDURE LoadCase(directory,selection,config)
+    resolve vehicle coordinate/window, static-order coordinate/window,
+        dynamic-order coordinate/window and transfer/sharing-flag inputs
+    resolve explicitly configured LT schedules and fixed-route inputs, if used
+    read headers and rows using the declared delimiter/culture/schema
+    check finite coordinates, unique IDs, valid windows and matched row identities
+    pair coordinates/windows by ID; for row-indexed files verify row IDs first
+    apply selection consistently to both coordinate/window records
+    FOR each physical vehicle k
+        create origin, return point, type ADR/LT, zone, capacity and duty limit
+        record availability, mode-specific travel/cost data and optional schedule
+    FOR each order r
+        create one stable order ID, type regular/same-day and submission time
+        record pickup/delivery windows, locations, size and service eligibility
+        attach transfer/sharing permissions and declared unserved penalty
+        create r+/r- fragment IDs only as views of this same order
+    initialOrders := orders visible at config.initialDecisionTime
+    arrivals := remaining orders sorted by (submittedAt,stableOrderId)
+    check that all required cost weights, durations and time-grid rules are set
+    return InputDataset{orders:initialOrders,vehicles,arrivals,
+                        selectedFiles,configuration:config}
+
+PROCEDURE ReadArrivals(arrivals,decisionTime,seenIds)
+    records := all records with submittedAt <= decisionTime and ID not in seenIds
+    return records, seenIds union IDs(records)
+
+PROCEDURE OrdersForEpoch(knownOrders,previousPlan,decisionTime)
+    retain previously accepted unfinished orders as mandatory service
+    include visible pending/unserved orders with a remaining admissible window
+    exclude completed service from new demand while retaining its committed history
+    classify expired requests explicitly; do not silently remove accepted work
+    return mandatory, optional, completed, expired
+
+PROCEDURE CopyIdentity(original,newRole)
+    copy all identity/metadata fields; set newRole before dictionary insertion
+    return immutable record
+
+NOTES
+    The input schema declares IDs, capacities, duty limits, travel/cost data and
+    arrival times. Header-only dynamic inputs represent a static case.
+    Case filenames do not determine model parameters.

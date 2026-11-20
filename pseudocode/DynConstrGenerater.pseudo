@@ -1,0 +1,58 @@
+PURPOSE Preserve completed actions, ongoing execution and accepted service.
+INPUT previous feasible Plan, new model, implementation time
+OUTPUT fixed prefix, residual state and required-service constraints
+REFERENCES DynConstrGenerater.Generating_Dy_Constr; periodic rescheduling framework
+
+PROCEDURE SnapshotCommittedState(previous,implementationTime)
+    REQUIRE previous is a validated Plan
+    completedPrefix := actions completed before or at implementationTime
+    inProgressArcs := selected actions with departure < implementationTime < arrival
+    include any issued noncancelable action from the execution/dispatch interface
+    FOR each physical vehicle k
+        if k has an ongoing/noncancelable action
+            residualSources[k] := that action's final state and release time
+        else
+            residualSources[k] := its reached state at implementationTime
+        derive onboard order IDs from completed/committed pickup, transfer and drop
+    acceptedUnfinishedOrders := previous.acceptedOrders minus completed deliveries
+    retain their current carrier, location, service state and promised requirements
+    return DynamicState{previousPlan:previous,implementationTime,completedPrefix,
+                        inProgressArcs,residualSources,onboardOrders,
+                        acceptedUnfinishedOrders}
+
+PROCEDURE FreezeLegacyDecisions(previous,newModel,ImT)
+    state := SnapshotCommittedState(previous,ImT)
+    IF newModel uses full-horizon variables
+        FOR every prior arc whose execution is completed/committed
+            if its completed package owner is absent from the new demand model
+                retain it in immutable committed history; continue
+            match by catalog-independent stable owner/record/state/time identity
+            REQUIRE exactly one matching variable
+            fix its new Y to the prior selected value
+        fix each selected in-progress/noncancelable action to 1 through its arrival
+        disallow alternative departures that conflict with a fixed action
+        forbid newly introduced arcs departing before the relevant released state
+    ELSE IF newModel uses a residual suffix
+        replace each vehicle source by state.residualSources[k]
+        initialize package sources and onboard loads from the same state
+        retain the fixed prefix outside the residual optimization objective
+        reduce each remaining duty allowance by committed duration
+    FOR each accepted unfinished order r
+        prohibit its unserved route
+        require all still-unperformed service and promised delivery-window events
+        preserve its current carrier until a legal future transfer
+    fix completed delivery/transfer events so they cannot be repeated or undone
+    attach state to newModel; mark commitmentsApplied to avoid duplicate insertion
+    return newModel
+
+PROCEDURE CheckCommitments(candidate,state)
+    REQUIRE identical completed/ongoing/noncancelable actions
+    REQUIRE suffix departure state/time equals the fixed prefix's release state/time
+    REQUIRE onboard membership and transfer carrier balance match at the boundary
+    REQUIRE every previously accepted unfinished order remains served
+    return valid or a commitment diagnostic
+
+NOTES
+    Full-horizon and residual encodings are alternatives. Use one consistently,
+    preserve ongoing actions and onboard loads, and count committed cost/time once.
+    FreezeLegacyDecisions retains its function name for call-site compatibility.

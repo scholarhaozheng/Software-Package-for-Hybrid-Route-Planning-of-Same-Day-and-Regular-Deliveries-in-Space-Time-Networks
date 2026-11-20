@@ -1,0 +1,14 @@
+{
+  "public_csharp_files": 29,
+  "source_modules": 31,
+  "implementation_modules": 29,
+  "specification_only_modules": 2,
+  "distributed_research_csharp_files": 29,
+  "paper_equations_mapped": 40,
+  "example_projects": 2,
+  "pseudocode_modules": 17,
+  "local_links_checked": 243,
+  "heading_links_checked": 10,
+  "failures": [],
+  "passed": true
+}

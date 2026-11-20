@@ -1,0 +1,143 @@
+PURPOSE Coordinate the paper's separate-route decomposition, integrality search
+    and validated handoff to periodic order assignment and route rescheduling.
+REFERENCES Paper Sections 3.2--3.5 and Eqs. 18--40;
+    Program.cs, GeneratingMasterProblem and separate pricing modules.
+ASSUMPTIONS Limits, node repair, plan validation and pricing contexts are
+    implementation choices for the paper's decomposition framework. Termination
+    records the explored scope and unresolved nodes; global bounds remain unknown.
+INPUT case, config with epoch settings, cost convention, tolerances and limits.
+OUTPUT SplitResult{bestFeasiblePlan?,status,pool,nodeHistories,initialSolutions,
+    input,scope,globalLowerBound=unknown,relativeGap=unknown,unresolvedNodes}.
+
+CONFIG CONTRACT
+    Set limits for total elapsed time, processed nodes, rounds per node and each
+        solver call (initialization/master/pricing/support/integerPool).
+    A limit may be explicitly unlimited, but missing or invalid fields are errors.
+    Record feasibilityTolerance, integralityTolerance, objectiveTolerance and
+        rcTolerance, and the immutable case/catalog/cost identity.
+    Config capacity is indexed by physical vehicle; it is not a fixed class value.
+    Control values come from the current solve and its configuration.
+
+TYPE SplitNodeResult
+    status,reason?,pool,lastMaster?,pricingBatch?,bestFeasiblePlan?,rounds,history
+    # status: stationary_integral, stationary_fractional, open, limit_reached,
+    #         contract_failure. All outcomes identify the current route-pool scope.
+
+PROCEDURE RunSplitDecomposition(case,config)
+    input := LoadCase(case,config.selection,config).
+    network := BuildNetwork(input,config).
+    seedPool,initialSolutions := CreateSeedPool(network,input).
+    root := Node{id=0,parentId=none,depth=0,pool=seedPool,inheritedDecisions=empty,
+                 vehicleBranches=empty,packageBranches=empty,status=active}.
+    frontier := [root]; unresolved := empty; histories := empty.
+    bestFeasiblePlan := initialSolutions.feasiblePlan if validated, otherwise none.
+    processed := 0.
+    WHILE frontier is nonempty AND global limits permit another node
+        node := remove next node under the configured deterministic queue rule.
+        result := SolveSplitNode(network,input,node,config,remainingBudget).
+        node.pool := result.pool; preserve the returned status/history on node.
+        processed += 1; record result with node/catalog/cost identities.
+        IF result.bestFeasiblePlan is validated and improves physical cost
+            bestFeasiblePlan := result.bestFeasiblePlan.
+        IF result.status IN {open,limit_reached,contract_failure}
+            Preserve node and its exact reason in unresolved; CONTINUE.
+        IF result.status=stationary_integral
+            Mark node current_pool_integral with its plan and pricing records.
+            CONTINUE.
+        IF result.status=stationary_fractional
+            decision := SelectLegacyBranch(result.pool,result.lastMaster.weights,
+                                           network,config,node).
+            IF decision is absent or invalid
+                Preserve node as branch_unresolved; CONTINUE.
+            node.pool := result.pool.
+            zeroChild,oneChild := GenerateChildren(node,decision).
+            Add both children to frontier and record their parent/branch decisions.
+            CONTINUE.
+        Preserve any unexpected status as contract_failure; never treat it as closed.
+
+    active := frontier plus unresolved.
+    IF global limit stopped the loop: status=limit_reached.
+    ELSE IF active is nonempty: status=search_open.
+    ELSE IF bestFeasiblePlan exists: status=completed_decomposition_search.
+    ELSE: status=finished_without_feasible_plan.
+    RETURN SplitResult{bestFeasiblePlan,status,pool=union of recorded route pools,
+        nodeHistories=histories,initialSolutions,input,
+        scope=split_route_decomposition,
+        globalLowerBound=unknown,relativeGap=unknown,unresolvedNodes=active}.
+    # A completed search reports the implemented stopping scope and its feasible
+    # plan. Route-indexed row changes prevent inferring an exact B&P certificate.
+
+PROCEDURE SolveSplitNode(network,input,node,config,budget)
+    pool := node.pool filtered by ColumnAllowed; counter := 0.
+    bestFeasiblePlan := none; repairAttempted := false; history := empty.
+    FOR round FROM 1 while node/global/solver limits permit
+        master := SolveSplitMaster(pool,config.capacity,node,continuous,
+                                   remaining master budget).
+        Record status, pool signature and objective availability.
+        IF master.status=restricted_pool_infeasible AND repairAttempted=false
+            repairAttempted := true.
+            repair := RepairNodeSeedPool(network,input,node,pool,config).
+            IF repair has a validated plan: update bestFeasiblePlan.
+            IF repair.inserted > 0: pool := repair.pool; CONTINUE.
+            RETURN SplitNodeResult(status=open,reason=restricted_pool_infeasible,
+                pool,lastMaster=master,bestFeasiblePlan,history).
+        IF master.status != optimal_lp
+            RETURN SplitNodeResult(status=open,reason=master.status,pool,
+                                   lastMaster=master,bestFeasiblePlan,history).
+        IF master.isIntegral
+            plan := ReconstructPlan(pool,master.weights,input,config).
+            IF ValidatePlan(plan,input,config) passes: update bestFeasiblePlan.
+            ELSE record invalid_integral_projection; do not export that plan.
+        dualBundle := master.duals with its row/pool/node/objective signatures.
+        batch := PriceSplitFamilies(network,dualBundle,pool,node,counter,config).
+        counter := batch.counter.
+        admission := InsertPricingResults(pool,batch,node,network,config).
+        pool := admission.pool; roundStatus := ClassifyRound(batch,admission).
+        Record every pricing/support status and each insertion/duplicate/rejection.
+        IF roundStatus=progress: CONTINUE; rebuild the entire route-indexed master.
+        IF roundStatus != stationary_current_pool
+            RETURN SplitNodeResult(status=open,reason=roundStatus,pool,
+                lastMaster=master,pricingBatch=batch,bestFeasiblePlan,history).
+
+        integerPool := SolveIntegerPool(pool,config.capacity,node,input,config).
+        IF integerPool contains a validated better plan: update bestFeasiblePlan.
+        IF master.isIntegral AND its reconstructed plan passed validation
+            RETURN SplitNodeResult(status=stationary_integral,pool,lastMaster=master,
+                pricingBatch=batch,bestFeasiblePlan,rounds=round,history).
+        IF master.isIntegral
+            RETURN SplitNodeResult(status=open,reason=invalid_integral_projection,
+                pool,lastMaster=master,pricingBatch=batch,bestFeasiblePlan,history).
+        RETURN SplitNodeResult(status=stationary_fractional,pool,lastMaster=master,
+            pricingBatch=batch,bestFeasiblePlan,rounds=round,history).
+    RETURN SplitNodeResult(status=limit_reached,reason=budget_exhausted,pool,
+        lastMaster if available,bestFeasiblePlan,history).
+
+PROCEDURE RepairNodeSeedPool(network,input,node,pool,config)
+    model := BuildArcModel(network,input,initial,node).
+    arcResult := SolveArcModel(model,config.limits.initialization).
+    IF arcResult has no validated plan
+        RETURN inserted=0,pool,status=arcResult.status,scope=arcResult.scope.
+    seeds := ExtractSplitColumns(arcResult,initializationKind=initial).
+    Retain only complete physical routes satisfying the same node restrictions.
+    Insert unseen seeds and update every coverage/ownership/incidence view.
+    RETURN pool,inserted,validated plan=arcResult.plan,status=seed_repaired.
+    # At most one repair attempt is made. Its feasibility status belongs to
+    # the direct arc model, separately from the restricted master.
+
+PROCEDURE RunCase(config)
+    result := RunSplitDecomposition(config.caseDirectory,config).
+    IF config.dynamicEnabled=false: RETURN result.
+    IF result.bestFeasiblePlan is absent
+        RETURN result with dynamicStatus=no_valid_initial_plan.
+    dynamicResult := RunDynamicEpochs(result.bestFeasiblePlan,result.input.arrivals,
+                                     config.epochs,result.input,config).
+    RETURN initialDecomposition=result,dynamicResult.
+    # Dynamic routing starts from the validated selected-route Plan.
+
+TERMINATION
+    Restricted LP and quadratic-pool values are ineligible for bound-based pruning.
+    Such pruning requires a verified full-model bound; none is supplied here.
+    Equal cost sequences, integer pool weights, a nonnegative support objective
+        and numerical solver termination are not interchangeable stopping tests.
+    Report the best feasible plan even when pricing/branching remains open.
+    Preserve every unprocessed/unresolved node, its pool and its termination reason.

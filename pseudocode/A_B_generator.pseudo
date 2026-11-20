@@ -1,0 +1,73 @@
+PURPOSE Convert feasible paths into the paper's separate route-column coefficients.
+INPUT ArcResult, validated Plan or validated PricingCandidate; initialization tag
+OUTPUT vehicle/package routes, ownership, coverage, service incidence and arc costs
+REFERENCES A_B_generator.Generating_a_and_b; paper Eqs. 18-31
+
+PROCEDURE ExtractSplitColumns(solution,initializationKind)
+    IF solution is an ArcResult or Plan
+        REQUIRE it contains a validated feasible Plan
+        vehiclePaths := all physical vehicle paths in that plan
+        packagePaths := all complete package paths in that plan
+    ELSE IF solution is a PricingCandidate
+        REQUIRE its actual owner path passes its local path/duty/branch checks
+        vehiclePaths := its vehicle path if present, otherwise empty
+        packagePaths := its complete package path if present, otherwise empty
+        do not require an independently priced path to be a complete global Plan
+    ELSE: return contract failure
+    result := empty RoutePool
+    FOR each (k,selected vehicle arcs) in vehiclePaths
+        path := TracePath(selected vehicle arcs,source[k],sink[k])
+        cost := sum(a in path) arcCost[k,a]
+        g[l,kPrime] := 1 iff kPrime == k
+        dVehicle[l,r] := service indicator of order r on path
+            under the same paper definition used by master/pricing
+        B[l,s] := incidence of supported state transition s on path
+        emit VehicleRoute(l,k,path,cost,duration,g,dVehicle,B)
+        retain a valid zero-cost unused vehicle route
+    FOR each (r,selected package arcs) in packagePaths
+        join r+/r- fragments at the same legal transfer location/time, if used
+        path := TracePath(complete package arcs,source[r],sink[r])
+        cost := sum(a in path) arcCost[r,a]
+        dPackage[q,rPrime] := 1 iff rPrime == r
+        b[q,s] := incidence of supported state transition s on path
+        isUnserved := path uses the paper unserved choice
+        emit PackageRoute(q,r,path,cost,dPackage,b,fragments,transfers,isUnserved)
+        retain an unserved route as a penalized route choice, not physical service
+    populate A/B dictionary views using the semantic mapping below
+    CheckViews(result)
+    return result
+
+PROCEDURE Cost(arc,initializationKind)
+    return arc.value under its declared paper/catalog convention
+    initializationKind records provenance and does not overwrite physical costs
+
+PROCEDURE TracePath(selected,source,sink)
+    current := source; path := empty; remaining := set(selected)
+    WHILE current != sink
+        next := unused outgoing arc from current
+        REQUIRE exactly one next arc and next not previously visited
+        append next; remove next from remaining; current := next.head
+    REQUIRE remaining is empty
+    return path
+
+PROCEDURE MergeColumn(pool,route)
+    signature := catalogId,kind,ownerId,ordered original arc IDs,service incidence
+    IF signature already present
+        REQUIRE all costs and coefficients agree; return existing routeId
+    assign fresh routeId; insert route, cost and every coefficient orientation
+    retain paired-fragment references under one package route ID
+    CheckViews(pool); return routeId
+
+PROCEDURE RemoveRoutes(pool,routeIds)
+    remove routes from costs, paths, g,dVehicle,dPackage,B,b and dictionary views
+    remove their fragment associations; remove empty entries after traversal
+    CheckViews(pool); return pool
+
+NOTES
+    g[l,k] records physical ownership; dVehicle[l,r] records service incidence.
+    dPackage[q,r] covers a complete package choice, including an unserved route.
+    A maps to service/coverage by route kind; B maps to that kind's arc incidence.
+    Keep g,dVehicle,dPackage,B,b explicit when exposing A/A_transpose and
+    B/B_transpose dictionaries.
+    Independent pricing supplies locally feasible paths. A selected solution
+    becomes an executable Plan after the global carrier/capacity audit.

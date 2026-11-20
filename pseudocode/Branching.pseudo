@@ -1,0 +1,68 @@
+PURPOSE Branch on original vehicle/package arc incidences and propagate each
+    decision to both the inherited route pool and all future pricing models.
+REFERENCES Paper branch-and-bound-style integrality framework;
+    Program.Generating_new_node, BB_node, BB_info.
+ASSUMPTIONS The paper leaves the branch rule unspecified. The rule below
+    branches on the arc marginal closest to 0.5, using stable keys and deterministic
+    tie breaking. Fractional nodes without an admissible arc remain unresolved.
+INPUT parent node, split route pool, current LP weights, immutable network catalog.
+OUTPUT two child nodes or an explicit no-candidate/key-contract outcome.
+
+TYPE ArcBranchDecision
+    ownerKind in {vehicle,package}; ownerId; catalogSignature
+    originalArcRecordId; complete tail/head point identities and times
+    value in {0,1}
+    # Preserve record identity if multiple arcs have the same endpoints.
+
+PROCEDURE SelectLegacyBranch(pool,weights,network,config,node=none)
+    marginals := ReconstructArcMarginals(pool,weights).
+    candidates := every owner/arc marginal satisfying
+        integralityTolerance < marginal < 1-integralityTolerance.
+    Remove any decision already fixed by node.inheritedDecisions, if node exists.
+    IF candidates is empty: RETURN no_candidate.
+    Choose the marginal closest to 0.5; break ties by kind, owner and arc ID.
+    Require the key to resolve to one original record in this catalog.
+    IF resolution fails: RETURN branch_key_failure.
+    RETURN ArcBranchDecision without child value.
+
+PROCEDURE ColumnAllowed(route,node)
+    FOR each decision whose owner matches route
+        usesArc := route's incidence for decision.originalArcRecordId.
+        IF usesArc != decision.value: RETURN false.
+    IF route is a paired-fragment package route
+        Check decisions on both fragments under their parent package identity.
+    RETURN true.
+
+PROCEDURE GenerateChildren(parent,decision)
+    IF decision is absent or invalid: RETURN branch_unresolved.
+    FOR childValue IN [0,1]
+        child := independent copy of parent restrictions and complete route pool.
+        Assign fresh node id, parent id and depth=parent.depth+1.
+        Add decision with childValue to child.inheritedDecisions and to the
+            matching vehicleBranches/packageBranches collection.
+        Reject contradictory decisions on the same original arc record.
+        Keep only routes satisfying ColumnAllowed(route,child).
+        Remove both stored fragments whenever their complete package q is removed.
+        Update costs, coverage, ownership, incidence and transposed dictionaries.
+        Set child.status=active; clear stale master duals and solve results.
+        Retain immutable catalog identity; recalculate child pool/branch signatures.
+        Do not infer full-model infeasibility merely because a filtered pool is empty.
+    RETURN zeroChild,oneChild.
+
+PROCEDURE ApplyBranchesToPricing(owner,arcVariables,node)
+    FOR every decision for owner
+        Resolve its original record in this pricing catalog.
+        IF decision.value=1 AND record absent: RETURN infeasible_branch_model.
+        IF record absent AND decision.value=0: CONTINUE.
+        Add arcVariables[record] = decision.value.
+    RETURN applied.
+    # Vehicle pricing applies vehicle decisions; target-package pricing applies
+    # package decisions. Optional supporting-vehicle solves apply both through
+    # their fixed package path and vehicle constraints.
+
+TERMINATION
+    The two children partition the current owner's binary arc decision.
+    If LP weights remain fractional but no supported arc branch exists, retain
+        branch_unresolved. A valid integer-pool incumbent may still be reported.
+    Preserve unresolved nodes. Restricted-master objectives cannot justify pruning.
+    Report the explored scope and incumbent; full-model optimality remains unproven.

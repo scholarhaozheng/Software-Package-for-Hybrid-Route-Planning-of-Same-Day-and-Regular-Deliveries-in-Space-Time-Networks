@@ -1,0 +1,70 @@
+PURPOSE Replan periodically from the selected feasible plan and current execution.
+INPUT initial Plan, arrivals, decision/implementation schedule, dataset and config
+OUTPUT activated feasible plans, pending/unserved orders and epoch status
+REFERENCES Program dynamic loop; OrderManager; DynConstrGenerater
+INTERFACES ReconstructPlan; SnapshotCommittedState; BuildArcModel; SolveArcModel
+
+PROCEDURE RunDynamicEpochs(initialPlan,arrivals,schedule,input,config)
+    previous := initialPlan
+    IF previous is none: return status=no_plan without starting execution
+    REQUIRE ValidatePlan(previous,input,config)
+    seenIds := IDs(input.orders); knownOrders := input.orders
+    pending := previous.unservedOrders; epochRecords := empty
+    FOR (decisionTime,implementationTime) IN schedule
+        REQUIRE implementationTime >= decisionTime and epochs are chronological
+        newRecords,seenIds := ReadArrivals(arrivals,decisionTime,seenIds)
+        knownOrders := merge knownOrders and newRecords by stable order ID
+        state := SnapshotCommittedState(previous,implementationTime)
+        state.decisionTime := decisionTime
+        mandatory,optional,completed,expired :=
+            OrdersForEpoch(knownOrders,previous,decisionTime)
+        IF optional and mandatory contain no work requiring replanning
+            record unchanged plan and expired requests; continue
+        epochInput := copy input with orders=mandatory union optional,
+                      dynamicState=state, committedHistory=completed
+        network := BuildNetwork(epochInput,config)
+        candidateModel := BuildArcModel(network,epochInput,dynamic)
+        ScreenNewOrders(optional,previous,implementationTime,candidateModel)
+        IF not candidateModel.commitmentsApplied
+            FreezeLegacyDecisions(previous,candidateModel,implementationTime)
+        result := SolveArcModel(candidateModel,config.epochLimits)
+        candidate := result.plan
+        IF candidate exists
+            candidate := join unchanged committed history to candidate
+                only if candidate is a residual suffix
+            accepted := ValidatePlan(candidate,epochInput,config)
+                        AND CheckCommitments(candidate,state)
+                        AND candidate available by the implementation deadline
+        ELSE
+            accepted := false
+        record epoch, visible IDs, status, candidate availability, cost and scope
+        IF accepted
+            keep previous active until implementationTime
+            schedule candidate for activation at implementationTime
+            previous := candidate
+            pending := optional minus candidate.acceptedOrders minus expired
+        ELSE
+            keep previous as the active feasible plan
+            pending := optional minus previous.acceptedOrders minus expired
+            record failure reason and pending IDs; continue to the next epoch
+    return previous, pending, epochRecords
+
+PROCEDURE ReplanSuffix(dynamicState,newArrivals,planner)
+    committed := SnapshotCommittedState(dynamicState.previousPlan,
+                                        dynamicState.implementationTime)
+    visible := arrivals submitted by dynamicState.decisionTime
+    construct residual vehicle/package sources, loads and remaining duty limits
+    require all accepted unfinished service and allow visible optional requests
+    suffix := planner(residual problem)
+    IF suffix exists
+        candidate := committed prefix joined to suffix
+        IF ValidatePlan(candidate) AND CheckCommitments(candidate,committed)
+            return candidate
+    return dynamicState.previousPlan and pending visible arrivals
+
+NOTES
+    bestFeasiblePlan contains validated integral routes. Seen arrivals and accepted
+    orders are separate sets, so failed solves leave eligible requests pending.
+    config.acceptancePolicy governs feasible limited solves. Missing, invalid or
+    late candidates leave previous active. Commitments also apply in epochs with
+    no new arrivals.

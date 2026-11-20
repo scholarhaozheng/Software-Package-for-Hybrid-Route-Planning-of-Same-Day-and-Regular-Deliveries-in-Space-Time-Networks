@@ -1,0 +1,85 @@
+PURPOSE Evaluate the paper's separate vehicle and package pricing families and
+    admit complete paths while preserving objective and solve-scope identities.
+REFERENCES Paper Eqs. 32--40; GeneratingSubProblem.cs.
+ASSUMPTIONS Vehicle pricing evaluates each existing reference-route context
+    separately. These current-pool objectives do not define a fixed-row full-master
+    pricing oracle; their status determines progress within the stated scope.
+INPUT network, current optimal restricted-master dual bundle, pool, node,
+    counter, config with pricing/support limits and tolerances.
+OUTPUT PricingBatch{results,candidates,diagnostics,status,counter,signatures}.
+
+PROCEDURE PriceSplitFamiliesLocal(network,duals,pool,node,counter,config)
+    counter += 1.
+    Require duals match this pool, row system, node and objective convention.
+    results := empty; candidates := empty; diagnostics := empty.
+    FOR every physical vehicle k
+        contexts := current vehicle routes lRef with owner(lRef)=k.
+        IF contexts is empty
+            Record pricing_context_missing(k); CONTINUE.
+        FOR every lRef in contexts
+            If the global deadline is reached, record unrun_context and CONTINUE.
+            context := (lRef,duals.rowSignature,pool.signature).
+            result := SolveSeparateVehicleModel(network,k,duals,
+                node.vehicleBranches,context,config.limits.pricing).
+            Record result even if no incumbent exists.
+            IF result has a valid candidate AND result.pricingObjective < -rcTolerance
+                Add candidate tagged vehicle_pricing with its context records.
+    FOR every active parent order r
+        If the global deadline is reached, record unrun_package and CONTINUE.
+        result := SolveSeparatePackageModel(network,r,duals,node.packageBranches,
+            config.limits,config.includeSupportSeeds,node.vehicleBranches).
+        Record pricing and support fields separately.
+        IF result has a valid candidate AND result.pricingObjective < -rcTolerance
+            Add its complete package route tagged package_pricing.
+            Add audited supporting vehicle routes, if present, tagged support_seed.
+    Determine whether every required vehicle context and every package model
+        either terminated optimally with a valid audited incumbent and finite
+        objective, or proved its declared operating/served-path model infeasible.
+    Unused/unserved connectors are already present as permitted seed routes;
+        they are not omitted unknown columns in these pricing calls.
+    IF any context is missing, failed, incomplete or unaudited: status=pricing_open.
+    ELSE IF any original pricing objective < -rcTolerance: status=negative_candidates.
+    ELSE: status=split_pricing_stationary.
+    RETURN PricingBatch{results,candidates,diagnostics,status,counter,signatures}.
+    # stationary means the documented current-pool expressions are nonnegative.
+    # This status carries no full-master LP bound or exact B&P certificate.
+    Cap each solver call by the smaller of its configured limit and the remaining
+        global budget. A skipped context makes status=pricing_open.
+
+PROCEDURE PriceSplitFamilies(network,duals,pool,node,counter,config)
+    RETURN PriceSplitFamiliesLocal(network,duals,pool,node,counter,config).
+    # Alias for the same pricing procedure.
+
+PROCEDURE InsertPricingResults(pool,batch,node,network,config)
+    inserted := 0; duplicates := empty; rejected := empty.
+    FOR every candidate in batch.candidates
+        Require the recorded dual/pool/branch signatures match its generating solve.
+        Validate the entire path, epoch commitments, cost and inherited branches.
+        IF invalid: record rejection and reason; CONTINUE.
+        identity := (kind,physical owner OR parent order,ordered original arc IDs,
+                     linked package-fragment identities,catalog signature).
+        IF identity exists in pool
+            Record duplicate with its original pricing objective and context.
+            IF its audited pricing objective is negative, mark negative_duplicate.
+            CONTINUE.
+        ExtractSplitColumns(candidate,initializationKind=candidate.tag).
+        Insert d[q,r], g[l,k], d[l,r], arc incidences and original route cost;
+            update every forward/transposed dictionary consistently.
+        inserted += 1.
+    Recompute pool signature if anything changed.
+    RETURN AdmissionResult{pool,inserted,duplicates,rejected,
+                          hasNegativeDuplicate,hasContractFailure}.
+
+PROCEDURE ClassifyRound(batch,admission)
+    IF admission.inserted > 0: RETURN progress; rebuild and resolve the master.
+    IF admission.hasContractFailure: RETURN unresolved_candidate_validation.
+    IF admission.hasNegativeDuplicate: RETURN unresolved_negative_duplicate.
+    IF batch.status=split_pricing_stationary: RETURN stationary_current_pool.
+    RETURN pricing_open with per-model termination reasons.
+
+TERMINATION
+    Equal route-cost sequences do not establish no progress: distinct paths can
+        have equal cost. Progress uses admitted complete-route identities.
+    Keep absent objectives unknown. Apply the reduced-cost threshold to the
+        pricing objective. Preserve solver limits and unresolved contexts in the
+        node record; terminate with their status when no progress is possible.

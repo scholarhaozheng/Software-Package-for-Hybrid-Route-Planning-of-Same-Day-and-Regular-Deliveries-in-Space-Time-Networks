@@ -1,0 +1,40 @@
+PURPOSE Identify eligible new orders and vehicle assignments at a decision epoch.
+INPUT visible new/pending orders, prior feasible plan, implementation time, model
+OUTPUT assignment eligibility and explicit optional screening scope
+REFERENCES OrderManager.Generating_Ordr_Assgnmnt_Constr; periodic order assignment
+
+PROCEDURE ScreenNewOrders(newOrders,priorPlan,ImT,newModel)
+    state := SnapshotCommittedState(priorPlan,ImT)
+    FOR each visible uncommitted order r
+        candidates := empty set
+        FOR each physical vehicle k
+            start := state.residualSources[k]
+            earliestReach := start.releaseTime + admissible travel-time lower bound
+                from start.position to an allowed pickup/transfer entry for r
+            modeAllowed := k's zone/type/schedule permits that service fragment
+            deadlinePossible := earliestReach <= the relevant latest service time
+            onwardPossible := an admissible lower bound permits remaining delivery
+            IF modeAllowed AND deadlinePossible AND onwardPossible
+                add k to candidates
+            ELSE
+                prohibit that k/r service assignment in newModel
+        IF candidates is empty and no legal multimodal chain can serve r
+            allow only r's unserved choice; record reason=unreachable
+        ELSE
+            preserve all candidate assignments for the coupled routing solve
+        IF newModel.configuration.enableNeighborhoodHeuristic
+            screen candidates using the declared route-distance/time neighborhood
+            record excluded assignments and scope=screened_search
+            never apply the screen to accepted unfinished service obligations
+    return newModel with eligibility records and scope
+
+PROCEDURE CheckOrderVisibility(order,decisionTime)
+    REQUIRE order.submittedAt <= decisionTime
+    return visible
+
+ASSUMPTIONS
+    Residual positions include the destination and release time of ongoing travel.
+    Reachability bounds allow permitted transfer chains: one vehicle need not
+    serve an order end-to-end. Default screening excludes assignments only when
+    a necessary condition fails. Optional neighborhood screening restricts the
+    search and is recorded as screened_search.

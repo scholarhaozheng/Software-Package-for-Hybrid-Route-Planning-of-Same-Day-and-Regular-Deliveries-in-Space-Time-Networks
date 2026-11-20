@@ -1,0 +1,22 @@
+{
+  "orders": [
+    {"id":"r1","pickup":"A","delivery":"B","release":0,"earliestPickup":3,"latestDelivery":8,"quantity":1,"exclusive":false},
+    {"id":"r2","pickup":"H","delivery":"C","release":0,"earliestPickup":0,"latestDelivery":4,"quantity":1,"exclusive":true}
+  ],
+  "arcs": [
+    {"id":"t-wait","layer":"truck","kind":"wait","from":{"site":"D","state":"ready","time":0},"to":{"site":"D","state":"ready","time":1},"cost":0,"order":null},
+    {"id":"t-drive1","layer":"truck","kind":"move","from":{"site":"D","state":"ready","time":1},"to":{"site":"A","state":"arrived","time":3},"cost":2,"order":null},
+    {"id":"t-pick","layer":"truck","kind":"pickup","from":{"site":"A","state":"arrived","time":3},"to":{"site":"A","state":"loaded","time":4},"cost":1,"order":"r1"},
+    {"id":"t-drive2","layer":"truck","kind":"move","from":{"site":"A","state":"loaded","time":4},"to":{"site":"B","state":"loaded","time":7},"cost":3,"order":null},
+    {"id":"t-drop","layer":"truck","kind":"delivery","from":{"site":"B","state":"loaded","time":7},"to":{"site":"B","state":"empty","time":8},"cost":1,"order":"r1"},
+    {"id":"t-return","layer":"truck","kind":"move","from":{"site":"B","state":"empty","time":8},"to":{"site":"D","state":"ready","time":10},"cost":2,"order":null},
+    {"id":"b-pick","layer":"robot","kind":"pickup","from":{"site":"H","state":"ready","time":0},"to":{"site":"H","state":"loaded","time":1},"cost":0.5,"order":"r2"},
+    {"id":"b-drive","layer":"robot","kind":"move","from":{"site":"H","state":"loaded","time":1},"to":{"site":"C","state":"loaded","time":3},"cost":1,"order":null},
+    {"id":"b-drop","layer":"robot","kind":"delivery","from":{"site":"C","state":"loaded","time":3},"to":{"site":"C","state":"empty","time":4},"cost":0.5,"order":"r2"},
+    {"id":"b-return","layer":"robot","kind":"move","from":{"site":"C","state":"empty","time":4},"to":{"site":"H","state":"ready","time":6},"cost":1,"order":null}
+  ],
+  "routes": [
+    {"vehicle":"truck1","layer":"truck","capacity":2,"start":{"site":"D","state":"ready","time":0},"end":{"site":"D","state":"ready","time":10},"arcs":["t-wait","t-drive1","t-pick","t-drive2","t-drop","t-return"]},
+    {"vehicle":"robot1","layer":"robot","capacity":1,"start":{"site":"H","state":"ready","time":0},"end":{"site":"H","state":"ready","time":6},"arcs":["b-pick","b-drive","b-drop","b-return"]}
+  ]
+}

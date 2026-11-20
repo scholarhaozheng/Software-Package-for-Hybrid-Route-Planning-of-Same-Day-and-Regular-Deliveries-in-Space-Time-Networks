@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../ClassName/ArcType.cs" Link="Original/ArcType.cs" />
+    <Compile Include="../../ClassName/ArcTime.cs" Link="Original/ArcTime.cs" />
+  </ItemGroup>
+</Project>

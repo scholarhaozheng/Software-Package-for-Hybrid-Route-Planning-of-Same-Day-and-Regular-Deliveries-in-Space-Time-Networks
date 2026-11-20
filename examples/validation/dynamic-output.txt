@@ -1,0 +1,12 @@
+At t=3: frozenSteps=2; replanFrom=A@3; onboard=r1
+ACCEPT r2: suffixTravel=4.00; returnTime=10
+REJECT r3: no feasible suffix within its time window
+0:2 move D->A
+2:3 pickup A->A r1
+3:4 move A->C
+4:5 pickup C->C r2
+5:6 move C->B
+6:7 delivery B->B r1
+7:8 delivery B->B r2
+8:10 move B->D
+PASS: frozen prefix; onboard state; accepted/rejected updates; full service; in-progress commitment.
